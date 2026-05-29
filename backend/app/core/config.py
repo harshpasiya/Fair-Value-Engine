@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api"
     ALLOWED_ORIGINS: list[str] = Field(
         default=["http://localhost:3000"],
-        description="CORS allowed origins. Add your production frontend URL here.",
+        description="CORS allowed origins. Add production frontend URL here.",
     )
 
     # ------------------------------------------------------------------
@@ -43,7 +43,10 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     SECRET_KEY: str = Field(
         ...,
-        description="JWT signing secret. Generate with: python -c \"import secrets; print(secrets.token_hex(32))\"",
+        description=(
+            "JWT signing secret. "
+            "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        ),
     )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
     ALGORITHM: str = "HS256"
@@ -93,11 +96,10 @@ class Settings(BaseSettings):
         default="",
         description="From https://newsapi.org — free tier: 100 requests/day",
     )
-    # yfinance is free and needs no key, but we track its rate limit
     YFINANCE_RATE_LIMIT_PER_HOUR: int = 2000
 
     # ------------------------------------------------------------------
-    # Rate limiting (requests per user per day on free tier)
+    # Rate limiting (requests per user per day)
     # ------------------------------------------------------------------
     FREE_TIER_DAILY_ANALYSES: int = 10
     REGISTERED_TIER_DAILY_ANALYSES: int = 999999  # effectively unlimited
@@ -112,8 +114,8 @@ class Settings(BaseSettings):
     # Monte Carlo
     # ------------------------------------------------------------------
     MONTE_CARLO_SIMULATIONS: int = 10_000
-    MONTE_CARLO_WACC_STD: float = 0.015   # ±1.5% standard deviation on WACC
-    MONTE_CARLO_GROWTH_STD: float = 0.02  # ±2% standard deviation on growth rate
+    MONTE_CARLO_WACC_STD: float = 0.015   # ±1.5% std dev on WACC
+    MONTE_CARLO_GROWTH_STD: float = 0.02  # ±2% std dev on growth rate
 
     # ------------------------------------------------------------------
     # Sentry (error monitoring)
@@ -140,7 +142,7 @@ class Settings(BaseSettings):
         if len(v) < 32:
             raise ValueError(
                 "SECRET_KEY must be at least 32 characters. "
-                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
         return v
 
@@ -173,3 +175,112 @@ def get_settings() -> Settings:
 
 # Module-level singleton — import this everywhere in the app
 settings = get_settings()
+
+
+# ---------------------------------------------------------------------------
+# Embedded tests — run with: python -m pytest backend/app/core/config.py -v
+# ---------------------------------------------------------------------------
+
+def test_settings_loads_successfully():
+    """Settings should load without errors given valid env vars."""
+    assert settings is not None
+    assert settings.APP_NAME == "Fair Value Engine"
+
+
+def test_default_environment_is_development():
+    """Default ENVIRONMENT should be 'development'."""
+    assert settings.ENVIRONMENT == "development"
+
+
+def test_default_algorithm_is_hs256():
+    """Default JWT algorithm should be HS256."""
+    assert settings.ALGORITHM == "HS256"
+
+
+def test_default_claude_model():
+    """Default Claude model should be set."""
+    assert "claude" in settings.CLAUDE_MODEL.lower()
+
+
+def test_monte_carlo_defaults():
+    """Monte Carlo defaults should be sensible values."""
+    assert settings.MONTE_CARLO_SIMULATIONS == 10_000
+    assert 0 < settings.MONTE_CARLO_WACC_STD < 0.1
+    assert 0 < settings.MONTE_CARLO_GROWTH_STD < 0.1
+
+
+def test_free_tier_daily_limit():
+    """Free tier daily analyses should be a positive integer."""
+    assert settings.FREE_TIER_DAILY_ANALYSES > 0
+
+
+def test_secret_key_too_short_raises():
+    """SECRET_KEY shorter than 32 chars should raise ValidationError."""
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="SECRET_KEY must be at least 32"):
+        Settings(
+            SECRET_KEY="short",
+            DATABASE_URL="postgresql+asyncpg://u:p@localhost:5432/db",
+            ANTHROPIC_API_KEY="sk-ant-test",
+        )
+
+
+def test_invalid_environment_raises():
+    """An invalid ENVIRONMENT value should raise ValidationError."""
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Settings(
+            SECRET_KEY="a" * 32,
+            DATABASE_URL="postgresql+asyncpg://u:p@localhost:5432/db",
+            ANTHROPIC_API_KEY="sk-ant-test",
+            ENVIRONMENT="invalid_env",  # type: ignore[arg-type]
+        )
+
+
+def test_valid_environments_accepted():
+    """All three valid ENVIRONMENT values should be accepted."""
+    for env in ("development", "staging", "production"):
+        s = Settings(
+            SECRET_KEY="a" * 32,
+            DATABASE_URL="postgresql+asyncpg://u:p@localhost:5432/db",
+            ANTHROPIC_API_KEY="sk-ant-test",
+            ENVIRONMENT=env,  # type: ignore[arg-type]
+        )
+        assert s.ENVIRONMENT == env
+
+
+def test_is_production_false_in_development():
+    """is_production should be False when ENVIRONMENT is development."""
+    assert settings.is_production is False
+
+
+def test_is_development_true():
+    """is_development should be True when ENVIRONMENT is development."""
+    assert settings.is_development is True
+
+
+def test_database_url_str_is_string():
+    """database_url_str should return a plain string starting with postgresql."""
+    assert isinstance(settings.database_url_str, str)
+    assert settings.database_url_str.startswith("postgresql")
+
+
+def test_is_production_true_when_set():
+    """is_production should be True when ENVIRONMENT is production."""
+    s = Settings(
+        SECRET_KEY="a" * 32,
+        DATABASE_URL="postgresql+asyncpg://u:p@localhost:5432/db",
+        ANTHROPIC_API_KEY="sk-ant-test",
+        ENVIRONMENT="production",  # type: ignore[arg-type]
+    )
+    assert s.is_production is True
+    assert s.is_development is False
+
+
+def test_get_settings_returns_same_instance():
+    """get_settings() should always return the same cached instance."""
+    s1 = get_settings()
+    s2 = get_settings()
+    assert s1 is s2
